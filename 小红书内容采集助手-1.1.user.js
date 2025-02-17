@@ -2,11 +2,12 @@
 // @name         小红书内容采集助手
 // @name:en     XiaoHongShu Content Scraper
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  采集小红书笔记的标题、正文内容和互动数据
-// @description:en  Scrape content and interaction metrics from XiaoHongShu
+// @version      1.0
+// @description  自动采集小红书笔记的标题、正文内容和互动数据
+// @description:en  Automatically scrape content and interaction metrics from XiaoHongShu
 // @author       哆元
-// @match        https://www.xiaohongshu.com/*
+// @match        https://www.xiaohongshu.com/explore/*
+// @match        https://www.xiaohongshu.com/discovery/*
 // @grant        GM_addStyle
 // @grant        GM_setClipboard
 // @run-at       document-end
@@ -42,10 +43,6 @@
         }
         .xhs-scraper-btn:hover {
             background: #e61e3c;
-        }
-        .xhs-scraper-btn:disabled {
-            background: #ccc;
-            cursor: not-allowed;
         }
         .xhs-scraper-btn.reset {
             background: #666;
@@ -115,96 +112,18 @@
             const notes = getSavedNotes();
             const currentUrl = window.location.href;
             const existingIndex = notes.findIndex(n => n.url === currentUrl);
-
+            
             if (existingIndex !== -1) {
                 notes[existingIndex] = { ...note, url: currentUrl };
             } else {
                 notes.push({ ...note, url: currentUrl });
             }
-
+            
             localStorage.setItem(STORAGE_KEY, JSON.stringify(notes));
             updateNoteCount();
         } catch (e) {
             console.error('保存笔记失败:', e);
         }
-    }
-
-    // 创建控制面板
-    function createPanel() {
-        const panel = document.createElement('div');
-        panel.className = 'xhs-scraper-panel';
-
-        // 检查当前是否在笔记页面
-        const isNotePage = window.location.href.includes('/explore/') ||
-                          window.location.href.includes('/discovery/');
-
-        panel.innerHTML = `
-            <h3 style="margin: 0 0 10px 0;">小红书内容采集</h3>
-            <div class="xhs-scraper-radio-group">
-                <div class="xhs-scraper-radio-item">
-                    <input type="radio" id="keepTopics" name="topicsOption" value="keep">
-                    <label for="keepTopics">保留话题标签</label>
-                </div>
-                <div class="xhs-scraper-radio-item">
-                    <input type="radio" id="removeTopics" name="topicsOption" value="remove" checked>
-                    <label for="removeTopics">移除话题标签</label>
-                </div>
-            </div>
-            <button class="xhs-scraper-btn" id="scrapeBtn" ${!isNotePage ? 'disabled' : ''}>采集内容</button>
-            <button class="xhs-scraper-btn" id="copyBtn">复制到剪贴板</button>
-            <button class="xhs-scraper-btn" id="exportExcelBtn">导出Excel</button>
-            <button class="xhs-scraper-btn reset" id="resetBtn">重置数据</button>
-            <div class="xhs-scraper-count" id="noteCount">已采集 0 篇笔记</div>
-            <div class="xhs-scraper-result" id="result">
-                ${!isNotePage ? '请进入笔记页面以使用采集功能' : ''}
-            </div>
-        `;
-
-        document.body.appendChild(panel);
-
-        // 只在笔记页面绑定采集事件
-        if (isNotePage) {
-            const radioButtons = document.querySelectorAll('input[name="topicsOption"]');
-            radioButtons.forEach(radio => {
-                radio.addEventListener('change', () => {
-                    if (window._lastScrapedContent) {
-                        scrapeContent();
-                    }
-                });
-            });
-
-            document.getElementById('scrapeBtn').addEventListener('click', scrapeContent);
-        }
-
-        // 这些功能在所有页面都可用
-        document.getElementById('copyBtn').addEventListener('click', copyToClipboard);
-        document.getElementById('exportExcelBtn').addEventListener('click', exportToExcel);
-        document.getElementById('resetBtn').addEventListener('click', resetAllData);
-
-        // 初始化笔记计数
-        updateNoteCount();
-    }
-
-    // 提取话题标签
-    function extractTopicTags(element) {
-        const topicTags = [];
-        element.querySelectorAll('a').forEach(el => {
-            if (el.classList.contains('topic') ||
-                el.classList.contains('tag-item') ||
-                el.id === 'hash-tag' ||
-                el.href.includes('/tag/') ||
-                el.textContent.startsWith('#')) {
-                let tag = el.textContent.trim();
-                if (!tag.startsWith('#')) {
-                    tag = '#' + tag;
-                }
-                if (!tag.endsWith('#')) {
-                    tag = tag + '#';
-                }
-                topicTags.push(tag);
-            }
-        });
-        return topicTags;
     }
 
     // 提取互动数据
@@ -216,24 +135,47 @@
                 comments: 0
             };
 
-            // 点赞数 - 使用精确的选择器来获取底部的点赞数
-            const likesElem = document.querySelector('span[data-v-e5195060][class="count"][selected-disabled-search]');
-            if (likesElem) {
-                metrics.likes = parseInt(likesElem.textContent) || 0;
+            // 寻找所有的互动区域
+            const interactionContainers = document.querySelectorAll('.interactions');
+            // 获取最后一个互动区域（通常是笔记底部的）
+            const bottomInteractions = Array.from(interactionContainers).pop();
+            
+            if (bottomInteractions) {
+                // 点赞数
+                const likesElem = bottomInteractions.querySelector('.like-wrapper .count, .count:not([selected-disabled-search])');
+                if (likesElem) {
+                    metrics.likes = parseInt(likesElem.textContent) || 0;
+                }
+
+                // 收藏数
+                const collectElem = bottomInteractions.querySelector('.collect-wrapper .count, span[class^="collect"] .count');
+                if (collectElem) {
+                    metrics.favorites = parseInt(collectElem.textContent) || 0;
+                }
+
+                // 评论数
+                const commentElem = bottomInteractions.querySelector('.chat-wrapper .count, span[class^="chat"] .count');
+                if (commentElem) {
+                    metrics.comments = parseInt(commentElem.textContent) || 0;
+                }
             }
 
-            // 收藏数
-            const collectElem = document.querySelector('.collect-wrapper .count');
-            if (collectElem) {
-                metrics.favorites = parseInt(collectElem.textContent) || 0;
+            // 如果上面的方法没有找到数据，尝试直接找底部的互动元素
+            if (metrics.likes === 0 && metrics.favorites === 0 && metrics.comments === 0) {
+                const bottomBar = document.querySelector('.note-bottom-bar, .note-footer');
+                if (bottomBar) {
+                    const counts = bottomBar.querySelectorAll('.count');
+                    const values = Array.from(counts)
+                        .map(el => parseInt(el.textContent) || 0)
+                        .filter(val => val > 0);
+                    
+                    if (values.length >= 3) {
+                        [metrics.likes, metrics.favorites, metrics.comments] = values;
+                    }
+                }
             }
 
-            // 评论数
-            const commentElem = document.querySelector('.chat-wrapper .count');
-            if (commentElem) {
-                metrics.comments = parseInt(commentElem.textContent) || 0;
-            }
-
+            console.log('提取到的互动数据:', metrics);
             return metrics;
         } catch (error) {
             console.error('提取互动数据失败:', error);
@@ -264,11 +206,77 @@
         }
     }
 
+    // 提取话题标签
+    function extractTopicTags(element) {
+        const topicTags = [];
+        element.querySelectorAll('a').forEach(el => {
+            if (el.classList.contains('topic') || 
+                el.classList.contains('tag-item') ||
+                el.id === 'hash-tag' || 
+                el.href.includes('/tag/') || 
+                el.textContent.startsWith('#')) {
+                let tag = el.textContent.trim();
+                if (!tag.startsWith('#')) {
+                    tag = '#' + tag;
+                }
+                if (!tag.endsWith('#')) {
+                    tag = tag + '#';
+                }
+                topicTags.push(tag);
+            }
+        });
+        return topicTags;
+    }
+
+    // 创建控制面板
+    function createPanel() {
+        const panel = document.createElement('div');
+        panel.className = 'xhs-scraper-panel';
+        panel.innerHTML = `
+            <h3 style="margin: 0 0 10px 0;">小红书内容采集</h3>
+            <div class="xhs-scraper-radio-group">
+                <div class="xhs-scraper-radio-item">
+                    <input type="radio" id="keepTopics" name="topicsOption" value="keep">
+                    <label for="keepTopics">保留话题标签</label>
+                </div>
+                <div class="xhs-scraper-radio-item">
+                    <input type="radio" id="removeTopics" name="topicsOption" value="remove" checked>
+                    <label for="removeTopics">移除话题标签</label>
+                </div>
+            </div>
+            <button class="xhs-scraper-btn" id="scrapeBtn">采集内容</button>
+            <button class="xhs-scraper-btn" id="copyBtn">复制到剪贴板</button>
+            <button class="xhs-scraper-btn" id="exportExcelBtn">导出Excel</button>
+            <button class="xhs-scraper-btn reset" id="resetBtn">重置数据</button>
+            <div class="xhs-scraper-count" id="noteCount">已采集 0 篇笔记</div>
+            <div class="xhs-scraper-result" id="result"></div>
+        `;
+        document.body.appendChild(panel);
+
+        // 绑定事件
+        const radioButtons = document.querySelectorAll('input[name="topicsOption"]');
+        radioButtons.forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (window._lastScrapedContent) {
+                    scrapeContent();
+                }
+            });
+        });
+
+        document.getElementById('scrapeBtn').addEventListener('click', scrapeContent);
+        document.getElementById('copyBtn').addEventListener('click', copyToClipboard);
+        document.getElementById('exportExcelBtn').addEventListener('click', exportToExcel);
+        document.getElementById('resetBtn').addEventListener('click', resetAllData);
+
+        // 初始化笔记计数
+        updateNoteCount();
+    }
+
     // 采集内容
     function scrapeContent() {
         const resultDiv = document.getElementById('result');
         const includeTopics = document.querySelector('input[name="topicsOption"]:checked').value === 'keep';
-
+        
         try {
             const title = document.querySelector('.note-detail .title') ||
                          document.querySelector('.note-content .title') ||
@@ -339,7 +347,7 @@
             return;
         }
 
-        const textToCopy = notes.map(note =>
+        const textToCopy = notes.map(note => 
             `标题：${note.title}\n\n正文：${note.content}\n\n互动数据：点赞 ${note.likes} | 收藏 ${note.favorites} | 评论 ${note.comments}`
         ).join('\n\n-------------------\n\n');
 
